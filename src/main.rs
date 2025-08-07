@@ -8,6 +8,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 struct Cli {
     image_path: PathBuf,
+    max_iters: usize,
 }
 
 fn main() {
@@ -43,7 +44,7 @@ fn main() {
                 rand::rng(),
             )
             .unwrap(),
-            10,
+            args.max_iters,
         ));
 
     println!("yaw");
