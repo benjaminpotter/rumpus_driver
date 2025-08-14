@@ -6,7 +6,10 @@ use rumpus::estimator::pattern_match::Searcher;
 use rumpus::prelude::*;
 use serde::{Deserialize, Serialize};
 use sguaba::{engineering::Orientation, systems::Wgs84};
-use std::{io::Read, path::PathBuf};
+use std::{
+    io::{Read, Write},
+    path::PathBuf,
+};
 use uom::{
     si::{
         angle::degree,
@@ -19,6 +22,8 @@ use uom::{
 struct Cli {
     image: PathBuf,
     params: PathBuf,
+    #[arg(short, long)]
+    output: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -61,7 +66,29 @@ fn main() {
             params.max_iters,
         ));
 
-    println!("{:#?}", estimate.to_tait_bryan_angles());
+    let (yaw, pitch, roll) = estimate.to_tait_bryan_angles();
+
+    let mut buffer = String::new();
+    buffer += "image,yaw,pitch,roll\n";
+    buffer += &format!(
+        "{},{:.5},{:.5},{:.5}\n",
+        args.image
+            .file_stem()
+            .expect("image path is not a directory")
+            .display(),
+        yaw.get::<degree>(),
+        pitch.get::<degree>(),
+        roll.get::<degree>(),
+    );
+
+    if let Some(output) = &args.output {
+        std::fs::File::create(output)
+            .expect("valid output file")
+            .write_all(buffer.as_bytes())
+            .expect("file is writable");
+    } else {
+        print!("{}", &buffer);
+    }
 }
 
 fn parse_params(path: &PathBuf) -> Option<SimulationParams> {
