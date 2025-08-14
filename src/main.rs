@@ -75,7 +75,8 @@ fn main() {
         args.image
             .file_stem()
             .expect("image path is not a directory")
-            .display(),
+            .to_str()
+            .expect("utf-8 file path"),
         yaw.get::<degree>(),
         pitch.get::<degree>(),
         roll.get::<degree>(),
