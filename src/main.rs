@@ -2,8 +2,8 @@ use chrono::prelude::*;
 use clap::Parser;
 use image::ImageReader;
 use rand::Rng;
-use rumpus::estimator::pattern_match::Searcher;
 use rumpus::prelude::*;
+use rumpus::{estimator::pattern_match::Searcher, light::filter::DopFilter};
 use serde::{Deserialize, Serialize};
 use sguaba::{engineering::Orientation, systems::Wgs84};
 use std::{
@@ -33,6 +33,7 @@ struct SimulationParams {
     latitude: Angle,
     longitude: Angle,
     time: DateTime<Utc>,
+    min_dop: f64,
     max_iters: usize,
 }
 
@@ -50,6 +51,7 @@ fn main() {
     let estimate = IntensityImage::from_bytes(width as u16, height as u16, &raw_image.into_raw())
         .expect("image dimensions are even")
         .rays(params.pixel_size, params.pixel_size)
+        .ray_filter(DopFilter::new(params.min_dop))
         .estimate(PatternMatch::new(
             Lens::from_focal_length(params.focal_length)
                 .expect("focal length is greater than zero"),
