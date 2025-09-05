@@ -11,11 +11,11 @@ use std::{
     path::PathBuf,
 };
 use uom::{
+    ConstZero,
     si::{
         angle::degree,
         f64::{Angle, Length},
     },
-    ConstZero,
 };
 
 #[derive(Parser)]

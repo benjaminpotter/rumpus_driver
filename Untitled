@@ -1,0 +1,7 @@
+
+Trying to find y, p, and r which minimize loss.
+A single batch is an iteration over all pixels in the measured image.
+The "training" set is comprised of these pixels
+
+Given an y, p, and r, how do we determine the next y, p, r to check?
+What is the weight update strategy?
