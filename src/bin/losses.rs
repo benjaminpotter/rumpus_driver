@@ -103,29 +103,26 @@ fn main() {
 
         let loss = rays
             .par_iter()
-            .filter_map(|ray| {
-                // Model a ray with the same CameraFrd coordinate as the
-                // measured ray.
+            .filter_map(|ray_sensor| {
+                // Model a ray with the same CameraFrd coordinate as the measured ray.
                 let ray_bearing = cam
-                    .trace_from_sensor(*ray.coord())
+                    .trace_from_sensor(*ray_sensor.coord())
                     .expect("ray coordinate should always have Z of zero");
+
                 // Ignore rays from below the horizon.
                 let modelled_aop = model.aop(ray_bearing)?;
-                let modelled_ray_global = Ray::new(*ray.coord(), modelled_aop, Dop::zero());
+                let modelled_ray_global = Ray::new(*ray_sensor.coord(), modelled_aop, Dop::zero());
 
-                // Transform the modelled ray from the global frame into
-                // the sensor frame.
-                let modelled_ray_sensor = modelled_ray_global
-                    .into_sensor_frame(zenith_coord.clone())
-                    // Camera trace_from_sky always returns a coordinate
-                    // with a zenith of zero which enforces this expect.
-                    .expect("zenith coord is has Z of zero");
+                // Transform the measured ray from the sensor frame into the global frame.
+                let ray_global = ray_sensor
+                    .into_global_frame(zenith_coord.clone())
+                    // Camera trace_from_sky always returns a coordinate with a zenith of zero which enforces this expect.
+                    .expect("zenith coord has a Z of zero");
 
-                // Compute the weighted, squared difference between the
-                // modelled ray and the measured ray.
-                let delta = *ray.aop() - *modelled_ray_sensor.aop();
+                // Compute the weighted, squared difference between the modelled ray and the measured ray.
+                let delta = *modelled_ray_global.aop() - *ray_global.aop();
                 let sq_diff = delta.into_inner().get::<radian>().powf(2.);
-                let weight = 1. / (*ray.dop()).into_inner();
+                let weight = 1. / (*ray_global.dop()).into_inner();
                 let weighted_sq_diff = weight * sq_diff;
 
                 Some(weighted_sq_diff)
