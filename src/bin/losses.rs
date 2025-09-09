@@ -83,8 +83,8 @@ fn main() {
     for _ in 0..params.max_iters {
         let orientation = Orientation::<CameraEnu>::tait_bryan_builder()
             .yaw(Angle::new::<degree>(rng.random_range(0.0..360.0)))
-            .pitch(Angle::new::<degree>(rng.random_range(-90.0..90.0)))
-            .roll(Angle::new::<degree>(rng.random_range(-90.0..90.0)))
+            .pitch(Angle::new::<degree>(0.0))
+            .roll(Angle::new::<degree>(0.0))
             .build();
 
         // Construct a camera at the new orientation.
