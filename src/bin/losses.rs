@@ -2,19 +2,18 @@ use chrono::prelude::*;
 use clap::Parser;
 use image::ImageReader;
 use rand::Rng;
+use rayon::prelude::*;
+use rumpus::light::filter::DopFilter;
 use rumpus::prelude::*;
-use rumpus::{estimator::pattern_match::Searcher, light::filter::DopFilter};
 use serde::{Deserialize, Serialize};
-use sguaba::{Bearing, engineering::Orientation, systems::Wgs84};
-use std::{
-    io::{Read, Write},
-    path::PathBuf,
-};
+use sguaba::{Bearing, engineering::Orientation, systems::Wgs84, vector};
+use std::{io::Read, path::PathBuf};
 use uom::{
     ConstZero,
     si::{
         angle::{degree, radian},
         f64::{Angle, Length},
+        length::meter,
     },
 };
 
@@ -22,8 +21,7 @@ use uom::{
 struct Cli {
     image: PathBuf,
     params: PathBuf,
-    #[arg(short, long)]
-    output: Option<PathBuf>,
+    output: PathBuf,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -42,6 +40,10 @@ struct Candidate {
     yaw: f64,
     pitch: f64,
     roll: f64,
+    /// The x coordinate of the up vector when oriented at yaw, pitch, roll.
+    optical_axis_east: f64,
+    /// The y coordinate of the up vector when oriented at yaw, pitch, roll.
+    optical_axis_north: f64,
     loss: f64,
 }
 
@@ -76,67 +78,85 @@ fn main() {
         params.time,
     );
 
-    let mut csv = csv::Writer::from_path(&args.output.unwrap()).unwrap();
-    RandomSearch::new(rand::rng())
-        .orientations()
-        .take(params.max_iters)
-        .for_each(|orientation| {
-            // Construct a camera at the new orientation.
-            let cam = Camera::new(lens.clone(), orientation.clone());
+    let mut rng = rand::rng();
+    let mut csv = csv::Writer::from_path(&args.output).unwrap();
+    for _ in 0..params.max_iters {
+        let orientation = Orientation::<CameraEnu>::tait_bryan_builder()
+            .yaw(Angle::new::<degree>(rng.random_range(0.0..360.0)))
+            .pitch(Angle::new::<degree>(rng.random_range(-90.0..90.0)))
+            .roll(Angle::new::<degree>(rng.random_range(-90.0..90.0)))
+            .build();
 
-            // Find the zenith coordinate in CameraFrd.
-            let zenith_coord = cam
-                .trace_from_sky(
-                    Bearing::<CameraEnu>::builder()
-                        .azimuth(Angle::ZERO)
-                        .elevation(Angle::HALF_TURN / 2.)
-                        .expect("elevation is on range -90 to 90")
-                        .build(),
-                )
-                .expect("zenith is always above the horizon");
+        // Construct a camera at the new orientation.
+        let cam = Camera::new(lens.clone(), orientation.clone());
 
-            let loss = rays
-                .iter()
-                .filter_map(|ray| {
-                    // Model a ray with the same CameraFrd coordinate as the
-                    // measured ray.
-                    let ray_bearing = cam
-                        .trace_from_sensor(*ray.coord())
-                        .expect("ray coordinate should always have Z of zero");
-                    // Ignore rays from below the horizon.
-                    let modelled_aop = model.aop(ray_bearing)?;
-                    let modelled_ray_global = Ray::new(*ray.coord(), modelled_aop, Dop::zero());
+        // Find the zenith coordinate in CameraFrd.
+        let zenith_coord = cam
+            .trace_from_sky(
+                Bearing::<CameraEnu>::builder()
+                    .azimuth(Angle::ZERO)
+                    .elevation(Angle::HALF_TURN / 2.)
+                    .expect("elevation is on range -90 to 90")
+                    .build(),
+            )
+            .expect("zenith is always above the horizon");
 
-                    // Transform the modelled ray from the global frame into
-                    // the sensor frame.
-                    let modelled_ray_sensor = modelled_ray_global
-                        .into_sensor_frame(zenith_coord.clone())
-                        // Camera trace_from_sky always returns a coordinate
-                        // with a zenith of zero which enforces this expect.
-                        .expect("zenith coord is has Z of zero");
+        let loss = rays
+            .par_iter()
+            .filter_map(|ray| {
+                // Model a ray with the same CameraFrd coordinate as the
+                // measured ray.
+                let ray_bearing = cam
+                    .trace_from_sensor(*ray.coord())
+                    .expect("ray coordinate should always have Z of zero");
+                // Ignore rays from below the horizon.
+                let modelled_aop = model.aop(ray_bearing)?;
+                let modelled_ray_global = Ray::new(*ray.coord(), modelled_aop, Dop::zero());
 
-                    // Compute the weighted, squared difference between the
-                    // modelled ray and the measured ray.
-                    let delta = *ray.aop() - *modelled_ray_sensor.aop();
-                    let sq_diff = delta.into_inner().get::<radian>().powf(2.);
-                    let weight = 1. / (*ray.dop()).into_inner();
-                    let weighted_sq_diff = weight * sq_diff;
+                // Transform the modelled ray from the global frame into
+                // the sensor frame.
+                let modelled_ray_sensor = modelled_ray_global
+                    .into_sensor_frame(zenith_coord.clone())
+                    // Camera trace_from_sky always returns a coordinate
+                    // with a zenith of zero which enforces this expect.
+                    .expect("zenith coord is has Z of zero");
 
-                    Some(weighted_sq_diff)
-                })
-                // Take the mean of the weighted, squared differences.
-                .sum::<f64>()
-                / rays.len() as f64;
+                // Compute the weighted, squared difference between the
+                // modelled ray and the measured ray.
+                let delta = *ray.aop() - *modelled_ray_sensor.aop();
+                let sq_diff = delta.into_inner().get::<radian>().powf(2.);
+                let weight = 1. / (*ray.dop()).into_inner();
+                let weighted_sq_diff = weight * sq_diff;
 
-            let (yaw, pitch, roll) = orientation.to_tait_bryan_angles();
-            csv.serialize(Candidate {
-                yaw: yaw.get::<degree>(),
-                pitch: pitch.get::<degree>(),
-                roll: roll.get::<degree>(),
-                loss,
+                Some(weighted_sq_diff)
             })
-            .unwrap();
-        });
+            // Take the mean of the weighted, squared differences.
+            .sum::<f64>()
+            / rays.len() as f64;
+
+        // Create a unit vector along the camera's optical axis.
+        let optical_axis_frd = vector!(
+            f = Length::new::<meter>(0.0),
+            r = Length::new::<meter>(0.0),
+            d = Length::new::<meter>(1.0);
+            in CameraFrd
+        );
+
+        // Transform the unit vector by orientation.
+        let camera_frd_to_enu = unsafe { orientation.map_as_zero_in::<CameraFrd>() }.inverse();
+        let optical_axis_enu = camera_frd_to_enu.transform(optical_axis_frd);
+
+        let (yaw, pitch, roll) = orientation.to_tait_bryan_angles();
+        csv.serialize(Candidate {
+            yaw: yaw.get::<degree>(),
+            pitch: pitch.get::<degree>(),
+            roll: roll.get::<degree>(),
+            optical_axis_east: optical_axis_enu.enu_east().get::<meter>(),
+            optical_axis_north: optical_axis_enu.enu_north().get::<meter>(),
+            loss,
+        })
+        .unwrap();
+    }
 }
 
 fn parse_params(path: &PathBuf) -> Option<SimulationParams> {
@@ -146,40 +166,4 @@ fn parse_params(path: &PathBuf) -> Option<SimulationParams> {
         .read_to_string(&mut buffer)
         .ok()?;
     toml::from_str(&buffer).ok()
-}
-
-struct RandomSearch<R> {
-    rng: R,
-}
-
-impl<R> RandomSearch<R> {
-    fn new(rng: R) -> Self {
-        Self { rng }
-    }
-}
-
-impl<R: Rng> Searcher for RandomSearch<R> {
-    type Iter = RandomSearchIter<R>;
-
-    fn orientations(self) -> Self::Iter {
-        RandomSearchIter { rng: self.rng }
-    }
-}
-
-struct RandomSearchIter<R> {
-    rng: R,
-}
-
-impl<R: Rng> Iterator for RandomSearchIter<R> {
-    type Item = Orientation<CameraEnu>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        Some(
-            Orientation::<CameraEnu>::tait_bryan_builder()
-                .yaw(Angle::new::<degree>(self.rng.random_range(0.0..360.0)))
-                .pitch(Angle::new::<degree>(self.rng.random_range(-5.0..5.0)))
-                .roll(Angle::new::<degree>(self.rng.random_range(-5.0..5.0)))
-                .build(),
-        )
-    }
 }
