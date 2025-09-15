@@ -1,0 +1,15 @@
+# meters 
+pixel_size = 0.0000069
+focal_length = 0.008
+
+# radians
+latitude = 0.7717619059516165
+longitude = -1.3347353094749075
+
+time = "2025-08-14T18:17:26.606031169Z"
+min_dop = 0.65
+
+max_iters = 10
+learning_rate = 1
+convergence_threshold = 0.1
+
